@@ -13,9 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-source 'https://rubygems.org' 
-gem 'rake'
-gem 'echoe'
-gem 'multi_json'
-gem 'snappy'
-gem 'test-unit'
+source "https://rubygems.org"
+
+# Specify your gem's dependencies in avro.gemspec
+gemspec
+
+group :test do
+  gem "test-unit", "~> 3.2"
+  gem "pry"
+end

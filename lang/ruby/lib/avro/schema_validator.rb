@@ -16,181 +16,254 @@
 
 module Avro
   class SchemaValidator
+    class ValidationError < StandardError
+      attr_reader :result
+
+      def initialize(result)
+        @result = result
+        super
+      end
+
+      def to_s
+       result.to_s
+      end
+    end
+
+    class TypeMismatchError < ValidationError; end
+
     ROOT_IDENTIFIER = '.'.freeze
     PATH_SEPARATOR = '.'.freeze
     INT_RANGE = Schema::INT_MIN_VALUE..Schema::INT_MAX_VALUE
     LONG_RANGE = Schema::LONG_MIN_VALUE..Schema::LONG_MAX_VALUE
     COMPLEX_TYPES = [:array, :error, :map, :record, :request]
 
-    class Result
-      attr_reader :errors
+    def self.validate *args
+      new(*args).validate
+    end
 
-      def initialize
-        @errors = []
-      end
+    def self.validate! *args
+      new(*args).validate!
+    end
 
-      def <<(error)
-        @errors << error
-      end
+    attr_reader :root_identifier
 
-      def add_error(path, message)
-        self << "at #{path} #{message}"
-      end
+    def initialize expected_schema, datum, root_identifier: ROOT_IDENTIFIER
+      @expected_schema  = expected_schema
+      @datum            = datum
+      @root_identifier = root_identifier
+    end
 
-      def failure?
-        @errors.any?
-      end
+    def full_errors
+      @full_errors ||= Hash.new{ |hash, key| hash[ key ] = [] }
+    end
 
-      def to_s
-        errors.join("\n")
+    def errors
+      full_errors.flat_map do |key, values|
+        values.map do |value|
+          "at #{ key } #{ value }"
+        end
       end
     end
 
-    class ValidationError < StandardError
-      attr_reader :result
+    def add_error(path, message)
+      full_errors[path] << message
+    end
 
-      def initialize(result = Result.new)
-        @result = result
-        super
-      end
+    def failure?
+      full_errors.any?
+    end
 
-      def to_s
-        result.to_s
+    def successful?
+      full_errors.empty?
+    end
+
+    def merge_errors other_errors
+      other_errors.each do |key, values|
+        full_errors[ key ].concat values
       end
     end
 
-    TypeMismatchError = Class.new(ValidationError)
+    def to_s
+      errors.join("\n")
+    end
 
-    class << self
-      def validate!(expected_schema, datum)
-        result = Result.new
-        validate_recursive(expected_schema, datum, ROOT_IDENTIFIER, result)
-        fail ValidationError, result if result.failure?
-        result
-      end
+    def validate
+      validate_recursive(@expected_schema, @datum, root_identifier)
+      self
+    end
 
-      private
+    def validate!
+      return self if validate.successful?
 
-      def validate_recursive(expected_schema, datum, path, result)
+      fail ValidationError, self
+    end
+
+    private
+
+    def validate_recursive(expected_schema, datum, path)
+      type_mismatch = :type_mismatch
+
+      res = catch(:halt) do |tag|
         case expected_schema.type_sym
         when :null
-          fail TypeMismatchError unless datum.nil?
+          throw tag, type_mismatch unless datum.nil?
+
         when :boolean
-          fail TypeMismatchError unless [true, false].include?(datum)
+          throw tag, type_mismatch unless [true, false].include?(datum)
+
         when :string, :bytes
-          fail TypeMismatchError unless datum.is_a?(String)
+          throw tag, type_mismatch unless datum.is_a?(String)
+
         when :int
-          fail TypeMismatchError unless datum.is_a?(Integer)
-          result.add_error(path, "out of bound value #{datum}") unless INT_RANGE.cover?(datum)
+          throw tag, type_mismatch unless datum.is_a?(Integer)
+
+          add_error(path, "out of bound value #{datum}") unless INT_RANGE.cover?(datum)
+          return
+
         when :long
-          fail TypeMismatchError unless datum.is_a?(Integer)
-          result.add_error(path, "out of bound value #{datum}") unless LONG_RANGE.cover?(datum)
+          throw tag, type_mismatch unless datum.is_a?(Integer)
+
+          add_error(path, "out of bound value #{datum}") unless LONG_RANGE.cover?(datum)
+          return
+
         when :float, :double
-          fail TypeMismatchError unless [Float, Integer].any?(&datum.method(:is_a?))
+          throw tag, type_mismatch unless [Float, Integer].any?(&datum.method(:is_a?))
+
         when :fixed
           if datum.is_a? String
+            return if datum.bytesize == expected_schema.size
+
             message = "expected fixed with size #{expected_schema.size}, got \"#{datum}\" with size #{datum.size}"
-            result.add_error(path, message) unless datum.bytesize == expected_schema.size
+            add_error(path, message)
           else
-            result.add_error(path, "expected fixed with size #{expected_schema.size}, got #{actual_value_message(datum)}")
+            message = "expected fixed with size #{expected_schema.size}, got #{actual_value_message(datum)}"
+            add_error(path, message)
           end
+
+          return
+
         when :enum
+          return if expected_schema.symbols.include?(datum)
+
           message = "expected enum with values #{expected_schema.symbols}, got #{actual_value_message(datum)}"
-          result.add_error(path, message) unless expected_schema.symbols.include?(datum)
+          add_error(path, message)
+          return
+
         when :array
-          validate_array(expected_schema, datum, path, result)
+          return validate_array(expected_schema, datum, path)
+
         when :map
-          validate_map(expected_schema, datum, path, result)
+          return validate_map(expected_schema, datum, path)
+
         when :union
-          validate_union(expected_schema, datum, path, result)
+          return validate_union(expected_schema, datum, path)
+
         when :record, :error, :request
-          fail TypeMismatchError unless datum.is_a?(Hash)
-          expected_schema.fields.each do |field|
-            deeper_path = deeper_path_for_hash(field.name, path)
-            validate_recursive(field.type, datum[field.name], deeper_path, result)
-          end
+          return validate_hash(expected_schema, datum, path)
+
         else
           fail "Unexpected schema type #{expected_schema.type_sym} #{expected_schema.inspect}"
         end
-      rescue TypeMismatchError
-        result.add_error(path, "expected type #{expected_schema.type_sym}, got #{actual_value_message(datum)}")
       end
 
-      def validate_array(expected_schema, datum, path, result)
-        fail TypeMismatchError unless datum.is_a?(Array)
-        datum.each_with_index do |d, i|
-          validate_recursive(expected_schema.items, d, path + "[#{i}]", result)
-        end
+      if res == type_mismatch
+        add_error(path, "expected type #{expected_schema.type_sym}, got #{actual_value_message(datum)}")
+      end
+    end
+
+    def validate_hash(expected_schema, datum, path)
+      unless datum.is_a?(Hash)
+        add_error(path, "expected type #{expected_schema.type_sym}, got #{actual_value_message(datum)}")
+        return
       end
 
-      def validate_map(expected_schema, datum, path, result)
-        datum.keys.each do |k|
-          result.add_error(path, "unexpected key type '#{ruby_to_avro_type(k.class)}' in map") unless k.is_a?(String)
-        end
-        datum.each do |k, v|
-          deeper_path = deeper_path_for_hash(k, path)
-          validate_recursive(expected_schema.values, v, deeper_path, result)
-        end
+      expected_schema.fields.each do |field|
+        deeper_path = deeper_path_for_hash(field.name, path)
+        validate_recursive(field.type, datum[field.name], deeper_path)
+      end
+    end
+
+    def validate_array(expected_schema, datum, path)
+      unless datum.is_a?(Array)
+        add_error(path, "expected type #{expected_schema.type_sym}, got #{actual_value_message(datum)}")
+        return
       end
 
-      def validate_union(expected_schema, datum, path, result)
-        if expected_schema.schemas.size == 1
-          validate_recursive(expected_schema.schemas.first, datum, path, result)
-          return
-        end
-        types_and_results = validate_possible_types(datum, expected_schema, path)
-        failures, successes = types_and_results.partition { |r| r[:result].failure? }
-        return if successes.any?
-        complex_type_failed = failures.detect { |r| COMPLEX_TYPES.include?(r[:type]) }
-        if complex_type_failed
-          complex_type_failed[:result].errors.each { |error| result << error }
-        else
-          types = expected_schema.schemas.map { |s| "'#{s.type_sym}'" }.join(', ')
-          result.add_error(path, "expected union of [#{types}], got #{actual_value_message(datum)}")
-        end
+      datum.each_with_index do |d, i|
+        validate_recursive(expected_schema.items, d, path + "[#{i}]")
+      end
+    end
+
+    def validate_map(expected_schema, datum, path)
+      datum.keys.each do |k|
+        next if k.is_a?(String)
+        add_error(path, "unexpected key type '#{ruby_to_avro_type(k.class)}' in map")
       end
 
-      def validate_possible_types(datum, expected_schema, path)
-        expected_schema.schemas.map do |schema|
-          result = Result.new
-          validate_recursive(schema, datum, path, result)
-          { type: schema.type_sym, result: result }
-        end
+      datum.each do |k, v|
+        deeper_path = deeper_path_for_hash(k, path)
+        validate_recursive(expected_schema.values, v, deeper_path)
+      end
+    end
+
+    def validate_union(expected_schema, datum, path)
+      if expected_schema.schemas.size == 1
+        validate_recursive(expected_schema.schemas.first, datum, path)
+        return
       end
 
-      def deeper_path_for_hash(sub_key, path)
-        "#{path}#{PATH_SEPARATOR}#{sub_key}".squeeze(PATH_SEPARATOR)
-      end
+      results = validate_possible_types(datum, expected_schema, path)
+      successes, failures = results.partition { |r| r[:result].successful? }
 
-      private
+      return if successes.any?
 
-      def actual_value_message(value)
-        avro_type = if value.class == Integer
-                      ruby_integer_to_avro_type(value)
-                    else
-                      ruby_to_avro_type(value.class)
-                    end
-        if value.nil?
-          avro_type
-        else
-          "#{avro_type} with value #{value.inspect}"
-        end
-      end
+      complex_type_failed = failures.find { |r| COMPLEX_TYPES.include?(r[:type]) }
 
-      def ruby_to_avro_type(ruby_class)
-        {
-          NilClass => 'null',
-          String => 'string',
-          Fixnum => 'int',
-          Bignum => 'long',
-          Float => 'float',
-          Hash => 'record'
-        }.fetch(ruby_class, ruby_class)
+      if complex_type_failed
+        merge_errors complex_type_failed[:result].full_errors
+      else
+        types = expected_schema.schemas.map { |s| "'#{s.type_sym}'" }.join(', ')
+        add_error(path, "expected union of [#{types}], got #{actual_value_message(datum)}")
       end
+    end
 
-      def ruby_integer_to_avro_type(value)
-        INT_RANGE.cover?(value) ? 'int' : 'long'
+    def validate_possible_types(datum, expected_schema, path)
+      expected_schema.schemas.map do |schema|
+        { type: schema.type_sym, result: self.class.validate(schema, datum, root_identifier: path) }
       end
+    end
+
+    def deeper_path_for_hash(*args)
+      args.reverse.join(PATH_SEPARATOR).squeeze(PATH_SEPARATOR)
+    end
+
+    def actual_value_message(value)
+      avro_type = if value.class == Integer
+                    ruby_integer_to_avro_type(value)
+                  else
+                    ruby_to_avro_type(value.class)
+                  end
+
+      if value.nil?
+        avro_type
+      else
+        "#{avro_type} with value #{value.inspect}"
+      end
+    end
+
+    def ruby_to_avro_type(ruby_class)
+      {
+        NilClass => 'null',
+        String => 'string',
+        Fixnum => 'int',
+        Bignum => 'long',
+        Float => 'float',
+        Hash => 'record'
+      }.fetch(ruby_class, ruby_class)
+    end
+
+    def ruby_integer_to_avro_type(value)
+      INT_RANGE.cover?(value) ? 'int' : 'long'
     end
   end
 end

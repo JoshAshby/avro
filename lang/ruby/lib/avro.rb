@@ -22,7 +22,7 @@ require 'stringio'
 require 'zlib'
 
 module Avro
-  VERSION = "FIXME"
+  autoload :VERSION, 'avro/version.rb'
 
   class AvroError < StandardError; end
 

@@ -30,9 +30,11 @@ class TestSchema < Test::Unit::TestCase
 
     assert_messages = [messages].flatten
     result_errors = error.result.errors
+
     assert_messages.each do |message|
       assert(result_errors.include?(message), "expected '#{message}' to be in '#{result_errors}'")
     end
+
     assert_equal(assert_messages.size, result_errors.size)
   end
 
@@ -117,6 +119,7 @@ class TestSchema < Test::Unit::TestCase
       [Avro::Schema::INT_MIN_VALUE, Avro::Schema::INT_MAX_VALUE, 1],
       [Avro::Schema::LONG_MIN_VALUE, Avro::Schema::LONG_MAX_VALUE, 'string']
     )
+
     assert_failed_validation('at . out of bound value 9223372036854775807') do
       validate!(schema, Avro::Schema::LONG_MAX_VALUE)
     end
@@ -160,7 +163,9 @@ class TestSchema < Test::Unit::TestCase
 
   def test_validate_shallow_record
     schema = hash_to_schema(
-      type: 'record', name: 'name', fields: [{ type: 'int', name: 'sub' }]
+      type: 'record',
+      name: 'name',
+      fields: [{ type: 'int', name: 'sub' }]
     )
 
     assert_nothing_raised { validate!(schema, 'sub' => 1) }
@@ -183,9 +188,11 @@ class TestSchema < Test::Unit::TestCase
   end
 
   def test_validate_array
-    schema = hash_to_schema(type: 'array',
-                            name: 'person',
-                            items: [{ type: 'int', name: 'height' }])
+    schema = hash_to_schema(
+      type: 'array',
+      name: 'person',
+      items: [{ type: 'int', name: 'height' }]
+    )
 
     assert_nothing_raised { validate!(schema, []) }
 
@@ -203,9 +210,11 @@ class TestSchema < Test::Unit::TestCase
   end
 
   def test_validate_enum
-    schema = hash_to_schema(type: 'enum',
-                            name: 'person',
-                            symbols: %w(one two three))
+    schema = hash_to_schema(
+      type: 'enum',
+      name: 'person',
+      symbols: %w(one two three)
+    )
 
     assert_nothing_raised { validate!(schema, 'one') }
 
@@ -223,9 +232,9 @@ class TestSchema < Test::Unit::TestCase
       ]
     )
 
-    assert_failed_validation('at .what_ever expected union of [\'long\', \'string\'], got null') {
+    assert_failed_validation('at .what_ever expected union of [\'long\', \'string\'], got null') do
       validate!(schema, 'what_ever' => nil)
-    }
+    end
   end
 
   def test_validate_union_of_nil_and_record_inside_array
@@ -264,9 +273,10 @@ class TestSchema < Test::Unit::TestCase
       ]
     )
 
-    assert_failed_validation('at .person expected type record, got null') {
+    assert_failed_validation('at .person expected type record, got null') do
       validate!(schema, 'not at all' => nil)
-    }
+    end
+
     assert_nothing_raised { validate!(schema, 'person' => {}) }
     assert_nothing_raised { validate!(schema, 'person' => { houses: [] }) }
     assert_nothing_raised { validate!(schema, 'person' => { 'houses' => [{ 'number_of_rooms' => 1 }] }) }
@@ -286,11 +296,13 @@ class TestSchema < Test::Unit::TestCase
   end
 
   def test_validate_map
-    schema = hash_to_schema(type: 'map',
-                            name: 'numbers',
-                            values: [
-                              { name: 'some', type: 'int' }
-                            ])
+    schema = hash_to_schema(
+      type: 'map',
+      name: 'numbers',
+      values: [
+        { name: 'some', type: 'int' }
+      ]
+    )
 
     assert_nothing_raised { validate!(schema, 'some' => 1) }
 
@@ -304,32 +316,34 @@ class TestSchema < Test::Unit::TestCase
   end
 
   def test_validate_deep_record
-    schema = hash_to_schema(type: 'record',
-                            name: 'person',
-                            fields: [
-                              {
-                                name: 'head',
-                                type: {
-                                  name: 'head',
-                                  type: 'record',
-                                  fields: [
-                                    {
-                                      name: 'hair',
-                                      type: {
-                                        name: 'hair',
-                                        type: 'record',
-                                        fields: [
-                                          {
-                                            name: 'color',
-                                            type: 'string'
-                                          }
-                                        ]
-                                      }
-                                    }
-                                  ]
-                                }
-                              }
-                            ])
+    schema = hash_to_schema(
+      type: 'record',
+      name: 'person',
+      fields: [
+        {
+          name: 'head',
+          type: {
+            name: 'head',
+            type: 'record',
+            fields: [
+              {
+                name: 'hair',
+                type: {
+                  name: 'hair',
+                  type: 'record',
+                  fields: [
+                    {
+                      name: 'color',
+                      type: 'string'
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    )
 
     assert_nothing_raised { validate!(schema, 'head' => { 'hair' => { 'color' => 'black' } }) }
 
@@ -351,27 +365,30 @@ class TestSchema < Test::Unit::TestCase
   end
 
   def test_validate_deep_record_with_array
-    schema = hash_to_schema(type: 'record',
-                            name: 'fruits',
-                            fields: [
-                              {
-                                name: 'fruits',
-                                type: {
-                                  name: 'fruits',
-                                  type: 'array',
-                                  items: [
-                                    {
-                                      name: 'fruit',
-                                      type: 'record',
-                                      fields: [
-                                        { name: 'name', type: 'string' },
-                                        { name: 'weight', type: 'float' }
-                                      ]
-                                    }
-                                  ]
-                                }
-                              }
-                            ])
+    schema = hash_to_schema(
+      type: 'record',
+      name: 'fruits',
+      fields: [
+        {
+          name: 'fruits',
+          type: {
+            name: 'fruits',
+            type: 'array',
+            items: [
+              {
+                name: 'fruit',
+                type: 'record',
+                fields: [
+                  { name: 'name', type: 'string' },
+                  { name: 'weight', type: 'float' }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    )
+
     assert_nothing_raised { validate!(schema, 'fruits' => [{ 'name' => 'apple', 'weight' => 30.2 }]) }
 
     assert_failed_validation('at .fruits[0].name expected type string, got null') do
@@ -384,19 +401,21 @@ class TestSchema < Test::Unit::TestCase
   end
 
   def test_validate_multiple_errors
-    schema = hash_to_schema(type: 'array',
-                            name: 'ages',
-                            items: [
-                              { type: 'int', name: 'age' }
-                            ])
+    schema = hash_to_schema(
+      type: 'array',
+      name: 'ages',
+      items: [
+        { type: 'int', name: 'age' }
+      ]
+    )
 
     exception = assert_raise(Avro::SchemaValidator::ValidationError) do
       validate!(schema, [nil, 'e'])
     end
+
     assert_equal 2, exception.result.errors.size
-    assert_equal(
-      "at .[0] expected type int, got null\nat .[1] expected type int, got string with value \"e\"",
-      exception.to_s
-    )
+
+    message = "at .[0] expected type int, got null\nat .[1] expected type int, got string with value \"e\""
+    assert_equal message, exception.to_s
   end
 end

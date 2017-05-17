@@ -15,50 +15,63 @@
 # limitations under the License.
 
 require 'rubygems'
-require 'echoe'
-VERSION = File.open('../../share/VERSION.txt').read.sub('-SNAPSHOT', '.pre1').chomp
-Echoe.new('avro', VERSION) do |p|
-  p.author = "Apache Software Foundation"
-  p.email = "dev@avro.apache.org"
-  p.summary = "Apache Avro for Ruby"
-  p.description = "Avro is a data serialization and RPC format"
-  p.url = "http://avro.apache.org/"
-  p.runtime_dependencies = %w[multi_json]
-  p.licenses = ["Apache License 2.0 (Apache-2.0)"]
+require "rake/testtask"
+
+Rake::TestTask.new do |t|
+  t.libs << "lib"
+  t.libs << "test"
+  t.pattern = "test/**/test_*.rb"
+  t.warning = false
 end
 
-t = Rake::TestTask.new(:interop)
-t.pattern = 'interop/test*.rb'
+Rake::TestTask.new(:interop) do |t|
+  t.pattern = 'interop/test*.rb'
+  t.warning = false
+end
 
+task :default => :test
+
+desc "Writes out the version file using the shared version number"
+task :version do
+  version_text = File.open('../../share/VERSION.txt').read.sub('-SNAPSHOT', '.pre1').chomp
+  version_file = Pathname.new(__FILE__).parent.join('lib', 'avro', 'version.rb')
+
+  version_file.write <<-RUBY
+module Avro
+  VERSION = "#{ version_text }".freeze
+end
+  RUBY
+end
+
+desc "Generates the ruby interop files to test against"
 task :generate_interop do
-  $:.unshift(HERE + '/lib')
-  $:.unshift(HERE + '/test')
+  here_dir = Pathname.new(__FILE__).parent
+
+  share_dir = here_dir.join '/../../share'
+  schemas_dir = share_dir.join '/test/schemas'
+  build_dir = here_dir.join '/../../build'
+
+  $:.unshift here_dir.join('/lib')
+  $:.unshift here_dir.join('/test')
+
   require 'avro'
   require 'random_data'
 
-  schema = Avro::Schema.parse(File.read(SCHEMAS + '/interop.avsc'))
-  r = RandomData.new(schema, ENV['SEED'])
-  f = File.open(BUILD + '/interop/data/ruby.avro', 'w')
-  writer = Avro::DataFile::Writer.new(f, Avro::IO::DatumWriter.new(schema), schema)
+  schema = Avro::Schema.parse(File.read(schemas_dir + '/interop.avsc'))
+
+  random_data = RandomData.new(schema, ENV['SEED'])
+  file_handle = build_dir.join('/interop/data/ruby.avro').open('w')
+
+  arvo_writer = Avro::DataFile::Writer.new(file_handle, Avro::IO::DatumWriter.new(schema), schema)
+
   begin
-    writer << r.next
-    writer << r.next
+    arvo_writer << random_data.next
+    arvo_writer << random_data.next
   ensure
-    writer.close
+    arvo_writer.close
   end
 
-  Avro::DataFile.open(BUILD + '/interop/data/ruby_deflate.avro', 'w', schema.to_s, :deflate) do |writer|
-    20.times { writer << r.next }
+  Avro::DataFile.open(build_dir.join('/interop/data/ruby_deflate.avro'), 'w', schema.to_s, :deflate) do |data_file|
+    20.times { data_file << random_data.next }
   end
-end
-
-
-HERE = File.expand_path(File.dirname(__FILE__))
-SHARE = HERE + '/../../share'
-SCHEMAS = SHARE + '/test/schemas'
-BUILD = HERE + '/../../build'
-
-task :dist => [:gem] do
-  mkdir_p "../../dist/ruby"
-  cp "pkg/avro-#{VERSION}.gem", "../../dist/ruby"
 end
