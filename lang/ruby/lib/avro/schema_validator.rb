@@ -95,12 +95,12 @@ module Avro
 
     def merge_errors(other_errors)
       other_errors.each do |key, values|
-        path_errors[ key ].concat(values)
+        path_errors[key].concat(values)
       end
     end
 
     def validate_recursive(expected_schema, datum, path)
-      catch(:halt) do |tag|
+      catch(:type_error) do |tag|
         case expected_schema.type_sym
         when :null
           throw tag unless datum.nil?
@@ -114,14 +114,14 @@ module Avro
         when :int
           throw tag unless datum.is_a?(Integer)
 
-          add_error(path, "out of bound value #{datum}") unless INT_RANGE.cover?(datum)
-          return
+          return if INT_RANGE.cover?(datum)
+          add_error(path, "out of bound value #{ datum }")
 
         when :long
           throw tag unless datum.is_a?(Integer)
 
-          add_error(path, "out of bound value #{datum}") unless LONG_RANGE.cover?(datum)
-          return
+          return if LONG_RANGE.cover?(datum)
+          add_error(path, "out of bound value #{ datum }")
 
         when :float, :double
           throw tag unless [Float, Integer].any?(&datum.method(:is_a?))
@@ -130,50 +130,48 @@ module Avro
           if datum.is_a? String
             return if datum.bytesize == expected_schema.size
 
-            message = "expected fixed with size #{expected_schema.size}, got \"#{datum}\" with size #{datum.size}"
+            message = "expected fixed with size #{ expected_schema.size }, got \"#{ datum }\" with size #{ datum.size }"
             add_error(path, message)
           else
-            message = "expected fixed with size #{expected_schema.size}, got #{actual_value_message(datum)}"
+            message = "expected fixed with size #{ expected_schema.size }, got #{ actual_value_message(datum) }"
             add_error(path, message)
           end
-
-          return
 
         when :enum
           return if expected_schema.symbols.include?(datum)
 
-          message = "expected enum with values #{expected_schema.symbols}, got #{actual_value_message(datum)}"
+          message = "expected enum with values #{ expected_schema.symbols }, got #{ actual_value_message(datum) }"
           add_error(path, message)
-          return
 
         when :array
-          return validate_array(expected_schema, datum, path)
+          throw tag unless datum.is_a?(Array)
+
+          validate_array(expected_schema, datum, path)
 
         when :map
-          return validate_map(expected_schema, datum, path)
+          throw tag unless datum.is_a?(Hash)
+
+          validate_map(expected_schema, datum, path)
 
         when :union
-          return validate_union(expected_schema, datum, path)
+          validate_union(expected_schema, datum, path)
 
         when :record, :error, :request
-          return validate_hash(expected_schema, datum, path)
+          throw tag unless datum.is_a?(Hash)
+
+          validate_hash(expected_schema, datum, path)
 
         else
-          fail "Unexpected schema type #{expected_schema.type_sym} #{expected_schema.inspect}"
+          fail "Unexpected schema type #{ expected_schema.type_sym } #{ expected_schema.inspect }"
         end
 
         return
       end
 
-      add_error(path, "expected type #{expected_schema.type_sym}, got #{actual_value_message(datum)}")
+      add_error(path, "expected type #{ expected_schema.type_sym }, got #{ actual_value_message(datum) }")
     end
 
     def validate_hash(expected_schema, datum, path)
-      unless datum.is_a?(Hash)
-        add_error(path, "expected type #{expected_schema.type_sym}, got #{actual_value_message(datum)}")
-        return
-      end
-
       expected_schema.fields.each do |field|
         deeper_path = deeper_path_for_hash(field.name, path)
         validate_recursive(field.type, datum[field.name], deeper_path)
@@ -181,25 +179,20 @@ module Avro
     end
 
     def validate_array(expected_schema, datum, path)
-      unless datum.is_a?(Array)
-        add_error(path, "expected type #{expected_schema.type_sym}, got #{actual_value_message(datum)}")
-        return
-      end
-
       datum.each_with_index do |d, i|
-        validate_recursive(expected_schema.items, d, path + "[#{i}]")
+        validate_recursive(expected_schema.items, d, path + "[#{ i }]")
       end
     end
 
     def validate_map(expected_schema, datum, path)
-      datum.keys.each do |k|
-        next if k.is_a?(String)
-        add_error(path, "unexpected key type '#{ruby_to_avro_type(k.class)}' in map")
+      datum.keys.each do |key|
+        next if key.is_a?(String)
+        add_error(path, "unexpected key type '#{ ruby_to_avro_type(key.class) }' in map")
       end
 
-      datum.each do |k, v|
-        deeper_path = deeper_path_for_hash(k, path)
-        validate_recursive(expected_schema.values, v, deeper_path)
+      datum.each do |key, value|
+        deeper_path = deeper_path_for_hash(key, path)
+        validate_recursive(expected_schema.values, value, deeper_path)
       end
     end
 
@@ -219,8 +212,8 @@ module Avro
       if complex_type_failed
         merge_errors complex_type_failed[:result].path_errors
       else
-        types = expected_schema.schemas.map { |s| "'#{s.type_sym}'" }.join(', ')
-        add_error(path, "expected union of [#{types}], got #{actual_value_message(datum)}")
+        types = expected_schema.schemas.map { |s| "'#{ s.type_sym }'" }.join(', ')
+        add_error(path, "expected union of [#{ types }], got #{ actual_value_message(datum) }")
       end
     end
 
@@ -246,7 +239,7 @@ module Avro
 
       return avro_type if value.nil?
 
-      "#{avro_type} with value #{value.inspect}"
+      "#{ avro_type } with value #{ value.inspect }"
     end
 
     def ruby_to_avro_type(ruby_class)
